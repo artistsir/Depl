@@ -93,12 +93,12 @@ HTML_TEMPLATE = '''
 '''
 
 def create_default_bot():
-    """Default bot template create karta hai"""
+    """Default bot template create karta hai with proper error handling"""
     bot_code = f'''
 import logging
 import sys
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
 
 # Setup logging
 logging.basicConfig(
@@ -111,21 +111,28 @@ BOT_TOKEN = "{BOT_TOKEN}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
-    user = update.effective_user
-    await update.message.reply_html(
-        f"👋 Hello {{user.mention_html()}}!\\\\n"
-        f"🤖 Bot successfully deployed on Render!\\\\n"
-        f"🚀 Powered by main.py single file solution\\\\n"
-        f"📝 Token: {{BOT_TOKEN[:10]}}..."
-    )
+    try:
+        user = update.effective_user
+        await update.message.reply_html(
+            f"👋 Hello {{user.mention_html()}}!\\\\n"
+            f"🤖 Bot successfully deployed on Render!\\\\n"
+            f"🚀 Powered by main.py single file solution\\\\n"
+            f"📝 Token: {{BOT_TOKEN[:10]}}..."
+        )
+    except Exception as e:
+        print(f"Error in start command: {{e}}")
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Echo the user message"""
-    await update.message.reply_text(f"🤖 You said: {{update.message.text}}")
+    try:
+        await update.message.reply_text(f"🤖 You said: {{update.message.text}}")
+    except Exception as e:
+        print(f"Error in echo: {{e}}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command"""
-    help_text = """
+    try:
+        help_text = """
 Available Commands:
 /start - Start the bot
 /help - Show this help message
@@ -133,11 +140,30 @@ Available Commands:
 
 Just send any message and I'll echo it back!
 """
-    await update.message.reply_text(help_text)
+        await update.message.reply_text(help_text)
+    except Exception as e:
+        print(f"Error in help command: {{e}}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Status command"""
-    await update.message.reply_text("✅ Bot is running perfectly on Render!\\\\n🚀 Single file main.py solution")
+    try:
+        await update.message.reply_text("✅ Bot is running perfectly on Render!\\\\n🚀 Single file main.py solution")
+    except Exception as e:
+        print(f"Error in status command: {{e}}")
+
+async def error_handler(update: Update, context: CallbackContext):
+    """Global error handler"""
+    try:
+        # Log the error
+        print(f"Exception occurred: {{context.error}}")
+        
+        # Notify user about error
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "❌ Sorry, an error occurred while processing your request."
+            )
+    except Exception as e:
+        print(f"Error in error handler: {{e}}")
 
 def main():
     """Main function to run the bot"""
@@ -151,10 +177,14 @@ def main():
         application.add_handler(CommandHandler("status", status))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
         
+        # Add error handler
+        application.add_error_handler(error_handler)
+        
         # Start the bot
         print("🤖 Starting Telegram Bot...")
         print(f"✅ Token: {{BOT_TOKEN[:10]}}...")
         print("🚀 Single File Solution - main.py")
+        print("✅ Error handlers registered")
         application.run_polling()
         
     except Exception as e:
@@ -167,7 +197,7 @@ if __name__ == "__main__":
     
     with open('bot.py', 'w') as f:
         f.write(bot_code)
-    print("✅ Default bot template created!")
+    print("✅ Default bot template created with error handling!")
 
 def run_bot():
     """Bot ko run karta hai"""
@@ -178,18 +208,21 @@ def run_bot():
             bot_process = subprocess.Popen([sys.executable, 'bot.py'], 
                                          stdout=subprocess.PIPE, 
                                          stderr=subprocess.STDOUT,
-                                         text=True)
+                                         text=True,
+                                         bufsize=1,
+                                         universal_newlines=True)
             bot_running = True
             print("✅ Bot started successfully")
             
             # Read bot output in background
             def read_output():
                 while True:
-                    output = bot_process.stdout.readline()
-                    if output == '' and bot_process.poll() is not None:
+                    if bot_process.poll() is not None:
                         break
+                    output = bot_process.stdout.readline()
                     if output:
                         print(f"BOT: {output.strip()}")
+                    time.sleep(0.1)
             
             threading.Thread(target=read_output, daemon=True).start()
             
@@ -205,22 +238,34 @@ def home():
     status_msg = "✅ Bot is running" if bot_running else "❌ Bot is stopped"
     status_class = "success" if bot_running else "error"
     
-    # Sample code for textarea
+    # Sample code for textarea - WITH ERROR HANDLING
     sample_code = '''# Your Telegram bot code here
 # BOT_TOKEN is automatically set from main.py
 
+import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackContext
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 
 # Use this BOT_TOKEN variable in your code
 BOT_TOKEN = "YOUR_TOKEN_HERE"  # Auto-replaced with actual token
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Your custom bot is working! 🚀")
+    try:
+        await update.message.reply_text("Hello! Your custom bot is working! 🚀")
+    except Exception as e:
+        print(f"Error: {e}")
+
+async def error_handler(update: Update, context: CallbackContext):
+    """Global error handler"""
+    print(f"Exception: {context.error}")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_error_handler(error_handler)  # ✅ Important: Error handler add karein
     application.run_polling()
 
 if __name__ == "__main__":
@@ -229,8 +274,8 @@ if __name__ == "__main__":
     # Get recent logs
     logs = ""
     try:
-        # Simple log collection from recent prints
-        logs = "Logs will appear here when bot is running..."
+        # Simple log collection
+        logs = "Bot logs will appear here when running..."
     except:
         pass
     
@@ -257,6 +302,10 @@ def upload_bot():
         # Stop existing bot
         if bot_process and bot_running:
             bot_process.terminate()
+            try:
+                bot_process.wait(timeout=5)
+            except:
+                bot_process.kill()
             bot_running = False
             time.sleep(2)
         
@@ -297,6 +346,10 @@ def upload_code():
         # Stop existing bot
         if bot_process and bot_running:
             bot_process.terminate()
+            try:
+                bot_process.wait(timeout=5)
+            except:
+                bot_process.kill()
             bot_running = False
             time.sleep(2)
         
@@ -327,6 +380,10 @@ def restart_bot():
     
     if bot_process and bot_running:
         bot_process.terminate()
+        try:
+            bot_process.wait(timeout=5)
+        except:
+            bot_process.kill()
         bot_running = False
         time.sleep(2)
     
@@ -345,6 +402,10 @@ def stop_bot():
     
     if bot_process and bot_running:
         bot_process.terminate()
+        try:
+            bot_process.wait(timeout=5)
+        except:
+            bot_process.kill()
         bot_running = False
         return jsonify({"message": "✅ Bot stopped successfully"})
     else:
