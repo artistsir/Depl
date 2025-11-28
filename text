@@ -1,0 +1,7 @@
+telegram-bot-deployer/
+├── main.py              # Main application
+├── requirements.txt     # Python dependencies
+├── runtime.txt         # Python version
+├── Dockerfile          # Docker configuration
+├── render.yaml         # Render deployment config
+└── .gitignore          # Git ignore file
