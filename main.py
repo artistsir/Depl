@@ -1,436 +1,453 @@
-from flask import Flask, request, jsonify, render_template_string
-import subprocess
 import os
-import threading
-import time
 import logging
-import sys
+import asyncio
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.errors import (
+    ApiIdInvalid, PhoneNumberInvalid, PhoneCodeInvalid,
+    PhoneCodeExpired, SessionPasswordNeeded, PasswordHashInvalid,
+    ChatAdminRequired, UserNotParticipant, ChatWriteForbidden
+)
+from telethon import TelegramClient
+from telethon.errors import (
+    ApiIdInvalidError, PhoneNumberInvalidError, PhoneCodeInvalidError,
+    PhoneCodeExpiredError, SessionPasswordNeededError, PasswordHashInvalidError
+)
+from telethon.sessions import StringSession
+from dotenv import load_dotenv
 
-app = Flask(__name__)
-
-# Global variables
-bot_process = None
-bot_running = False
-
-# ✅ YAHAN APNA BOT TOKEN DALEN
-BOT_TOKEN = "8072839594:AAGLrkL4L2DVkzAiG1lhvyqGlq_DAYoaQpQ"
+# Load environment variables
+load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# HTML template for web interface
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Telegram Bot Deployer</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .form-group { margin: 25px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
-        label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }
-        input, textarea, button { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; }
-        textarea { height: 300px; font-family: 'Courier New', monospace; font-size: 12px; }
-        button { background: #007bff; color: white; border: none; cursor: pointer; font-size: 16px; }
-        button:hover { background: #0056b3; }
-        button.stop { background: #dc3545; }
-        button.stop:hover { background: #c82333; }
-        .status { padding: 15px; border-radius: 5px; margin: 15px 0; font-weight: bold; }
-        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
-        pre { background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; overflow: auto; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🤖 Telegram Bot Deployer</h1>
-        <div class="status info">
-            ✅ Your Bot Token: {{ token_display }}<br>
-            📍 Single File Solution - main.py
-        </div>
-        
-        <div class="form-group">
-            <h3>📤 Upload Your Bot Code</h3>
-            <form action="/upload" method="post" enctype="multipart/form-data">
-                <label for="file">Upload bot.py file:</label>
-                <input type="file" id="file" name="file" accept=".py" required>
-                <button type="submit">🚀 Upload & Deploy</button>
-            </form>
-            
-            <h4>Or paste your Python code:</h4>
-            <form action="/upload_code" method="post">
-                <label for="code">Paste your Python bot code (BOT_TOKEN already included):</label>
-                <textarea id="code" name="code" placeholder="# Your Telegram bot code here\n# BOT_TOKEN = 'YOUR_TOKEN' - Already set in main.py">{{ sample_code }}</textarea>
-                <button type="submit">🚀 Deploy Code</button>
-            </form>
-        </div>
+# Bot configuration
+API_ID = int(os.getenv("API_ID", "123456"))
+API_HASH = os.getenv("API_HASH", "abcdef123456")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "123456:ABC-DEF")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+MUST_JOIN = os.getenv("MUST_JOIN", "")
+PORT = int(os.getenv("PORT", 8080))
 
-        <div class="form-group">
-            <h3>📊 Bot Status</h3>
-            <div class="status {{ status_class }}">{{ status_message }}</div>
-            <div>
-                <form action="/restart" method="post" style="display:inline;">
-                    <button type="submit">🔄 Restart Bot</button>
-                </form>
-                <form action="/stop" method="post" style="display:inline;">
-                    <button type="submit" class="stop">🛑 Stop Bot</button>
-                </form>
-            </div>
-        </div>
+# Text messages
+START_TEXT = """
+**🤖 Welcome to Advanced String Session Generator!**
 
-        {% if logs %}
-        <div class="form-group">
-            <h3>📝 Recent Logs</h3>
-            <pre>{{ logs }}</pre>
-        </div>
-        {% endif %}
-    </div>
-</body>
-</html>
-'''
+I can generate **Pyrogram** and **Telethon** string sessions for you.
 
-def create_default_bot():
-    """Default bot template create karta hai with proper error handling"""
-    bot_code = f'''
-import logging
-import sys
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
+**Features:**
+• Pyrogram v2 Sessions
+• Telethon Sessions  
+• Bot String Sessions
+• User String Sessions
+• Secure & Fast Generation
 
-# Setup logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+**Click /generate to create your session!**
+
+**🔧 Supported Libraries:**
+- Pyrogram
+- Telethon
+- Pyrogram Bot
+- Telethon Bot
+
+**📚 Tutorial:** [Click Here](https://docs.pyrogram.org/)
+**💬 Support:** @StarkBotsChat
+"""
+
+HELP_TEXT = """
+**📖 String Session Bot Help**
+
+**How to Generate Session:**
+1. Click /generate or "Generate Session"
+2. Choose library type
+3. Enter API_ID from https://my.telegram.org
+4. Enter API_HASH from https://my.telegram.org
+5. Enter phone number (for user) or bot token (for bot)
+6. Complete authentication
+
+**📚 Supported Libraries:**
+- **Pyrogram**: Modern Telegram MTProto API framework
+- **Telethon**: Full-featured Telegram client library  
+- **Pyrogram Bot**: For bot accounts using Pyrogram
+- **Telethon Bot**: For bot accounts using Telethon
+
+**⚠️ Security Notes:**
+• Never share your string session
+• Store it securely
+• Regenerate if compromised
+
+**Need Help?** @StarkBotsChat
+"""
+
+ABOUT_TEXT = """
+**👨‍💻 About String Session Bot**
+
+**Version:** 2.0 Advanced
+**Framework:** Pyrogram
+**Deploy:** Render Compatible
+
+**Features:**
+• Multi-library support
+• Secure session generation
+• Fast & reliable
+• Free to use
+
+**Developer:** @StarkProgrammer
+**Source Code:** [GitHub](https://github.com)
+**Support:** @StarkBotsChat
+
+**🔗 Useful Links:**
+• [Pyrogram Documentation](https://docs.pyrogram.org/)
+• [Telethon Documentation](https://docs.telethon.dev/)
+• [MTProto Documentation](https://core.telegram.org/api)
+"""
+
+# Button layouts
+START_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🚀 Generate Session", callback_data="generate")],
+    [
+        InlineKeyboardButton("📖 Help", callback_data="help"),
+        InlineKeyboardButton("👨‍💻 About", callback_data="about")
+    ],
+    [InlineKeyboardButton("🔧 Source Code", url="https://github.com")]
+])
+
+HOME_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🏠 Home", callback_data="home")]
+])
+
+ASK_QUES = "**Please choose the Python library you want to generate string session for:**"
+BUTTONS_QUES = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("Pyrogram", callback_data="pyrogram"),
+        InlineKeyboardButton("Telethon", callback_data="telethon"),
+    ],
+    [
+        InlineKeyboardButton("Pyrogram Bot", callback_data="pyrogram_bot"),
+        InlineKeyboardButton("Telethon Bot", callback_data="telethon_bot"),
+    ],
+    [InlineKeyboardButton("🏠 Home", callback_data="home")]
+])
+
+# Initialize Pyrogram client
+app = Client(
+    "string_session_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    in_memory=True
 )
 
-# ✅ BOT TOKEN (Auto-set from main.py)
-BOT_TOKEN = "{BOT_TOKEN}"
+# Start Command
+@app.on_message(filters.command("start") & filters.private)
+async def start_command(client: Client, message: Message):
+    await message.reply_text(
+        START_TEXT,
+        reply_markup=START_BUTTONS,
+        disable_web_page_preview=True
+    )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
-    try:
-        user = update.effective_user
-        await update.message.reply_html(
-            f"👋 Hello {{user.mention_html()}}!\\\\n"
-            f"🤖 Bot successfully deployed on Render!\\\\n"
-            f"🚀 Powered by main.py single file solution\\\\n"
-            f"📝 Token: {{BOT_TOKEN[:10]}}..."
+# Help Command
+@app.on_message(filters.command("help") & filters.private)
+async def help_command(client: Client, message: Message):
+    await message.reply_text(
+        HELP_TEXT,
+        reply_markup=HOME_BUTTONS,
+        disable_web_page_preview=True
+    )
+
+# About Command
+@app.on_message(filters.command("about") & filters.private)
+async def about_command(client: Client, message: Message):
+    await message.reply_text(
+        ABOUT_TEXT,
+        reply_markup=HOME_BUTTONS,
+        disable_web_page_preview=True
+    )
+
+# Generate Command
+@app.on_message(filters.command("generate") & filters.private)
+async def generate_command(client: Client, message: Message):
+    await message.reply_text(ASK_QUES, reply_markup=BUTTONS_QUES)
+
+# Callback Query Handler
+@app.on_callback_query()
+async def callback_handler(client: Client, callback_query: CallbackQuery):
+    query = callback_query.data.lower()
+    
+    if query == "home":
+        await callback_query.message.edit_text(
+            START_TEXT,
+            reply_markup=START_BUTTONS,
+            disable_web_page_preview=True
         )
-    except Exception as e:
-        print(f"Error in start command: {{e}}")
+    elif query == "help":
+        await callback_query.message.edit_text(
+            HELP_TEXT,
+            reply_markup=HOME_BUTTONS,
+            disable_web_page_preview=True
+        )
+    elif query == "about":
+        await callback_query.message.edit_text(
+            ABOUT_TEXT,
+            reply_markup=HOME_BUTTONS,
+            disable_web_page_preview=True
+        )
+    elif query == "generate":
+        await callback_query.message.edit_text(ASK_QUES, reply_markup=BUTTONS_QUES)
+    elif query in ["pyrogram", "telethon", "pyrogram_bot", "telethon_bot"]:
+        await callback_query.answer()
+        telethon = query.startswith("telethon")
+        is_bot = query.endswith("_bot")
+        await generate_session(client, callback_query.message, telethon, is_bot)
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Echo the user message"""
+async def generate_session(client: Client, message: Message, telethon=False, is_bot=False):
     try:
-        await update.message.reply_text(f"🤖 You said: {{update.message.text}}")
-    except Exception as e:
-        print(f"Error in echo: {{e}}")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help command"""
-    try:
-        help_text = """
-Available Commands:
-/start - Start the bot
-/help - Show this help message
-/status - Check bot status
-
-Just send any message and I'll echo it back!
-"""
-        await update.message.reply_text(help_text)
-    except Exception as e:
-        print(f"Error in help command: {{e}}")
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Status command"""
-    try:
-        await update.message.reply_text("✅ Bot is running perfectly on Render!\\\\n🚀 Single file main.py solution")
-    except Exception as e:
-        print(f"Error in status command: {{e}}")
-
-async def error_handler(update: Update, context: CallbackContext):
-    """Global error handler"""
-    try:
-        # Log the error
-        print(f"Exception occurred: {{context.error}}")
-        
-        # Notify user about error
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "❌ Sorry, an error occurred while processing your request."
-            )
-    except Exception as e:
-        print(f"Error in error handler: {{e}}")
-
-def main():
-    """Main function to run the bot"""
-    try:
-        # Create application
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("status", status))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-        
-        # Add error handler
-        application.add_error_handler(error_handler)
-        
-        # Start the bot
-        print("🤖 Starting Telegram Bot...")
-        print(f"✅ Token: {{BOT_TOKEN[:10]}}...")
-        print("🚀 Single File Solution - main.py")
-        print("✅ Error handlers registered")
-        application.run_polling()
-        
-    except Exception as e:
-        print(f"❌ Error starting bot: {{e}}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
-'''
-    
-    with open('bot.py', 'w') as f:
-        f.write(bot_code)
-    print("✅ Default bot template created with error handling!")
-
-def run_bot():
-    """Bot ko run karta hai"""
-    global bot_process, bot_running
-    try:
-        if os.path.exists('bot.py'):
-            print("🚀 Starting bot.py...")
-            bot_process = subprocess.Popen([sys.executable, 'bot.py'], 
-                                         stdout=subprocess.PIPE, 
-                                         stderr=subprocess.STDOUT,
-                                         text=True,
-                                         bufsize=1,
-                                         universal_newlines=True)
-            bot_running = True
-            print("✅ Bot started successfully")
-            
-            # Read bot output in background
-            def read_output():
-                while True:
-                    if bot_process.poll() is not None:
-                        break
-                    output = bot_process.stdout.readline()
-                    if output:
-                        print(f"BOT: {output.strip()}")
-                    time.sleep(0.1)
-            
-            threading.Thread(target=read_output, daemon=True).start()
-            
+        # Determine session type
+        if telethon:
+            ty = "Telethon"
         else:
-            print("❌ bot.py not found")
+            ty = "Pyrogram v2"
+        if is_bot:
+            ty += " Bot"
+        
+        user_id = message.chat.id
+        await message.reply_text(f"**Starting {ty} Session Generation...**")
+        
+        # Get API ID
+        api_id_msg = await client.ask(
+            user_id, 
+            "**Please send your API_ID:**\n\nGet from https://my.telegram.org\n\nType /cancel to stop",
+            filters=filters.text,
+            timeout=300
+        )
+        if await is_cancelled(api_id_msg):
+            return
+            
+        try:
+            api_id = int(api_id_msg.text)
+        except ValueError:
+            await api_id_msg.reply("❌ Invalid API_ID! Must be an integer. Please start again with /generate")
+            return
+        
+        # Get API HASH
+        api_hash_msg = await client.ask(
+            user_id,
+            "**Please send your API_HASH:**\n\nGet from https://my.telegram.org\n\nType /cancel to stop", 
+            filters=filters.text,
+            timeout=300
+        )
+        if await is_cancelled(api_hash_msg):
+            return
+        api_hash = api_hash_msg.text
+        
+        # Get phone number or bot token
+        if not is_bot:
+            prompt = "**Send your PHONE_NUMBER with country code:**\nExample: `+1234567890`\n\nType /cancel to stop"
+        else:
+            prompt = "**Send your BOT_TOKEN:**\nExample: `12345:abcdefghijklmnopqrstuvwxyz`\n\nType /cancel to stop"
+            
+        auth_msg = await client.ask(user_id, prompt, filters=filters.text, timeout=300)
+        if await is_cancelled(auth_msg):
+            return
+        auth_data = auth_msg.text
+        
+        # Initialize client
+        if not is_bot:
+            await message.reply_text("📤 Sending OTP...")
+        else:
+            await message.reply_text("🤖 Logging in as Bot...")
+            
+        if telethon:
+            tg_client = TelegramClient(StringSession(), api_id, api_hash)
+        else:
+            if is_bot:
+                tg_client = Client(
+                    f"bot_{user_id}", 
+                    api_id=api_id, 
+                    api_hash=api_hash, 
+                    bot_token=auth_data,
+                    in_memory=True
+                )
+            else:
+                tg_client = Client(
+                    f"user_{user_id}",
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    in_memory=True
+                )
+        
+        await tg_client.connect()
+        
+        # Authentication process
+        if not is_bot:
+            # User authentication
+            if telethon:
+                sent_code = await tg_client.send_code_request(auth_data)
+            else:
+                sent_code = await tg_client.send_code(auth_data)
+            
+            # Ask for OTP
+            otp_msg = await client.ask(
+                user_id,
+                "**Send the OTP received on Telegram:**\n\nIf OTP is `12345`, send as: `1 2 3 4 5`\n\nType /cancel to stop",
+                filters=filters.text,
+                timeout=600
+            )
+            if await is_cancelled(otp_msg):
+                await tg_client.disconnect()
+                return
+                
+            otp_code = otp_msg.text.replace(" ", "")
+            
+            try:
+                if telethon:
+                    await tg_client.sign_in(auth_data, otp_code)
+                else:
+                    await tg_client.sign_in(auth_data, sent_code.phone_code_hash, otp_code)
+                    
+            except (SessionPasswordNeeded, SessionPasswordNeededError):
+                password_msg = await client.ask(
+                    user_id,
+                    "**🔒 Account has 2FA. Send your password:**\n\nType /cancel to stop",
+                    filters=filters.text,
+                    timeout=300
+                )
+                if await is_cancelled(password_msg):
+                    await tg_client.disconnect()
+                    return
+                    
+                try:
+                    if telethon:
+                        await tg_client.sign_in(password=password_msg.text)
+                    else:
+                        await tg_client.check_password(password_msg.text)
+                except (PasswordHashInvalid, PasswordHashInvalidError):
+                    await password_msg.reply("❌ Invalid password! Please start again with /generate")
+                    await tg_client.disconnect()
+                    return
+                    
+        else:
+            # Bot authentication
+            try:
+                if telethon:
+                    await tg_client.start(bot_token=auth_data)
+                else:
+                    await tg_client.sign_in_bot(auth_data)
+            except Exception as e:
+                await message.reply_text(f"❌ Invalid BOT_TOKEN: {e}\nPlease start again with /generate")
+                await tg_client.disconnect()
+                return
+        
+        # Generate session string
+        if telethon:
+            session_string = tg_client.session.save()
+        else:
+            session_string = await tg_client.export_session_string()
+        
+        # Send session string
+        session_text = f"""
+**✅ {ty.upper()} STRING SESSION**
+
+```{session_string}```
+
+**⚠️ Important:**
+• Keep this string safe and secure!
+• Don't share with anyone!
+• This can be used to access your account.
+
+**Generated by @StringSessionBot**
+"""
+        
+        try:
+            # Try to send to saved messages first
+            if not is_bot:
+                await tg_client.send_message("me", session_text)
+            # Also send via bot
+            await client.send_message(user_id, session_text)
+            await message.reply_text("**✅ Session generated successfully! Check your saved messages and this chat.**")
+        except Exception as e:
+            # If failed, send in current chat
+            await message.reply_text(session_text)
+            await message.reply_text("**✅ Session generated successfully!**")
+        
+        await tg_client.disconnect()
+        
+    except (ApiIdInvalid, ApiIdInvalidError):
+        await message.reply_text("❌ Invalid API_ID/API_HASH combination! Please start again with /generate")
+    except (PhoneNumberInvalid, PhoneNumberInvalidError):
+        await message.reply_text("❌ Invalid phone number! Please start again with /generate")
+    except (PhoneCodeInvalid, PhoneCodeInvalidError):
+        await message.reply_text("❌ Invalid OTP code! Please start again with /generate")
+    except (PhoneCodeExpired, PhoneCodeExpiredError):
+        await message.reply_text("❌ OTP code expired! Please start again with /generate")
+    except asyncio.TimeoutError:
+        await message.reply_text("⏰ Timeout! Please try again with /generate")
     except Exception as e:
-        print(f"❌ Error starting bot: {e}")
+        error_msg = f"❌ An error occurred: {str(e)}\n\nPlease try again with /generate"
+        await message.reply_text(error_msg)
+        logger.error(f"Session generation error: {e}")
 
-@app.route('/')
-def home():
-    """Home page"""
-    token_display = f"{BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}" if BOT_TOKEN else "Not set"
-    status_msg = "✅ Bot is running" if bot_running else "❌ Bot is stopped"
-    status_class = "success" if bot_running else "error"
-    
-    # Sample code for textarea - WITH ERROR HANDLING
-    sample_code = '''# Your Telegram bot code here
-# BOT_TOKEN is automatically set from main.py
+async def is_cancelled(msg: Message):
+    if msg.text and msg.text.startswith('/cancel'):
+        await msg.reply_text("❌ Process cancelled! Use /generate to start again.")
+        return True
+    return False
 
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackContext
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-
-# Use this BOT_TOKEN variable in your code
-BOT_TOKEN = "YOUR_TOKEN_HERE"  # Auto-replaced with actual token
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Must Join Handler
+@app.on_message(filters.private & filters.incoming, group=-1)
+async def must_join_handler(client: Client, message: Message):
+    if not MUST_JOIN:
+        return
+        
     try:
-        await update.message.reply_text("Hello! Your custom bot is working! 🚀")
+        try:
+            await client.get_chat_member(MUST_JOIN, message.from_user.id)
+        except UserNotParticipant:
+            if MUST_JOIN.isalpha():
+                link = "https://t.me/" + MUST_JOIN
+            else:
+                chat_info = await client.get_chat(MUST_JOIN)
+                link = chat_info.invite_link
+                
+            await message.reply(
+                f"**⚠️ Access Denied!**\n\nYou must join [this channel]({link}) to use me. After joining, try again!",
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ Join Channel ✨", url=link)]
+                ])
+            )
+            await message.stop_propagation()
+    except ChatAdminRequired:
+        logger.error(f"I'm not admin in MUST_JOIN chat: {MUST_JOIN}")
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Must join error: {e}")
 
-async def error_handler(update: Update, context: CallbackContext):
-    """Global error handler"""
-    print(f"Exception: {context.error}")
+# Web server for Render
+from aiohttp import web
 
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_error_handler(error_handler)  # ✅ Important: Error handler add karein
-    application.run_polling()
+async def web_server():
+    web_app = web.Application()
+    web_app.router.add_get("/", lambda request: web.Response(text="Bot is running!"))
+    return web_app
 
 if __name__ == "__main__":
-    main()'''
-    
-    # Get recent logs
-    logs = ""
+    # Start web server in background
     try:
-        # Simple log collection
-        logs = "Bot logs will appear here when running..."
-    except:
-        pass
-    
-    return render_template_string(HTML_TEMPLATE, 
-                                token_display=token_display,
-                                status_message=status_msg,
-                                status_class=status_class,
-                                sample_code=sample_code,
-                                logs=logs)
-
-@app.route('/upload', methods=['POST'])
-def upload_bot():
-    """Bot file upload handler"""
-    global bot_process, bot_running
-    
-    if 'file' not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    
-    file = request.files['file']
-    if file.filename == '' or not file.filename.endswith('.py'):
-        return jsonify({"error": "Please upload a valid .py file"}), 400
-    
-    try:
-        # Stop existing bot
-        if bot_process and bot_running:
-            bot_process.terminate()
-            try:
-                bot_process.wait(timeout=5)
-            except:
-                bot_process.kill()
-            bot_running = False
-            time.sleep(2)
+        from threading import Thread
+        def run_web():
+            web.run_app(web_server(), port=PORT, host='0.0.0.0')
         
-        # Read uploaded file content
-        file_content = file.read().decode('utf-8')
-        
-        # Replace BOT_TOKEN placeholder with actual token
-        file_content = file_content.replace('"YOUR_TOKEN_HERE"', f'"{BOT_TOKEN}"')
-        file_content = file_content.replace("'YOUR_TOKEN_HERE'", f"'{BOT_TOKEN}'")
-        file_content = file_content.replace("YOUR_TOKEN_HERE", BOT_TOKEN)
-        
-        # Save the modified file
-        with open('bot.py', 'w') as f:
-            f.write(file_content)
-        
-        # Start the new bot
-        threading.Thread(target=run_bot).start()
-        time.sleep(3)
-        
-        return jsonify({
-            "message": "✅ Bot deployed successfully!",
-            "status": "running",
-            "token_set": True
-        })
+        Thread(target=run_web, daemon=True).start()
+        logger.info(f"Web server started on port {PORT}")
     except Exception as e:
-        return jsonify({"error": f"❌ Deployment failed: {str(e)}"}), 500
-
-@app.route('/upload_code', methods=['POST'])
-def upload_code():
-    """Code paste handler"""
-    global bot_process, bot_running
+        logger.warning(f"Failed to start web server: {e}")
     
-    code = request.form.get('code', '').strip()
-    if not code:
-        return jsonify({"error": "No code provided"}), 400
-    
-    try:
-        # Stop existing bot
-        if bot_process and bot_running:
-            bot_process.terminate()
-            try:
-                bot_process.wait(timeout=5)
-            except:
-                bot_process.kill()
-            bot_running = False
-            time.sleep(2)
-        
-        # Replace BOT_TOKEN placeholder with actual token
-        code = code.replace('"YOUR_TOKEN_HERE"', f'"{BOT_TOKEN}"')
-        code = code.replace("'YOUR_TOKEN_HERE'", f"'{BOT_TOKEN}'")
-        code = code.replace("YOUR_TOKEN_HERE", BOT_TOKEN)
-        
-        # Save code to bot.py
-        with open('bot.py', 'w') as f:
-            f.write(code)
-        
-        # Start the new bot
-        threading.Thread(target=run_bot).start()
-        time.sleep(3)
-        
-        return jsonify({
-            "message": "✅ Bot code deployed successfully!",
-            "status": "running"
-        })
-    except Exception as e:
-        return jsonify({"error": f"❌ Deployment failed: {str(e)}"}), 500
-
-@app.route('/restart', methods=['POST'])
-def restart_bot():
-    """Bot restart handler"""
-    global bot_process, bot_running
-    
-    if bot_process and bot_running:
-        bot_process.terminate()
-        try:
-            bot_process.wait(timeout=5)
-        except:
-            bot_process.kill()
-        bot_running = False
-        time.sleep(2)
-    
-    if os.path.exists('bot.py'):
-        threading.Thread(target=run_bot).start()
-        return jsonify({"message": "✅ Bot restarted successfully"})
-    else:
-        create_default_bot()
-        threading.Thread(target=run_bot).start()
-        return jsonify({"message": "✅ Default bot created and started"})
-
-@app.route('/stop', methods=['POST'])
-def stop_bot():
-    """Bot stop handler"""
-    global bot_process, bot_running
-    
-    if bot_process and bot_running:
-        bot_process.terminate()
-        try:
-            bot_process.wait(timeout=5)
-        except:
-            bot_process.kill()
-        bot_running = False
-        return jsonify({"message": "✅ Bot stopped successfully"})
-    else:
-        return jsonify({"error": "❌ Bot is not running"}), 400
-
-@app.route('/status')
-def status():
-    """Status check"""
-    return jsonify({
-        "bot_running": bot_running,
-        "bot_file_exists": os.path.exists('bot.py'),
-        "token_set": bool(BOT_TOKEN)
-    })
-
-# Server start pe default bot create karo
-if __name__ == '__main__':
-    print("🚀 Starting Telegram Bot Deployer...")
-    print(f"✅ Bot Token: {BOT_TOKEN[:10]}...")
-    
-    # Ensure default bot exists
-    if not os.path.exists('bot.py'):
-        create_default_bot()
-    
-    # Start bot automatically
-    threading.Thread(target=run_bot).start()
-    
-    # Start Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Start the bot
+    logger.info("Starting Advanced String Session Bot...")
+    app.run()
