@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import (
@@ -8,6 +9,7 @@ from pyrogram.errors import (
 )
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from aiohttp import web
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +23,7 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MUST_JOIN = os.environ.get("MUST_JOIN", "")
+PORT = int(os.environ.get("PORT", 8080))
 
 # Validate required environment variables
 if not API_ID or not API_HASH or not BOT_TOKEN:
@@ -463,27 +466,53 @@ async def generate_final_session(client: Client, message: Message, session_data:
         if user_id in user_sessions:
             del user_sessions[user_id]
 
+# Web server for Render port binding
+async def health_check(request):
+    return web.Response(text="🤖 String Session Bot is running!")
+
+async def start_web_server():
+    web_app = web.Application()
+    web_app.router.add_get('/', health_check)
+    web_app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    
+    logger.info(f"🌐 Web server started on port {PORT}")
+    return runner
+
 # Start the bot
-if __name__ == "__main__":
+async def main():
     logger.info("Starting String Session Bot...")
     print("🤖 Bot is starting...")
     
     try:
-        app.start()
+        # Start web server for Render
+        web_runner = await start_web_server()
+        
+        # Start the bot
+        await app.start()
         print("✅ Bot started successfully!")
-        logger.info("Bot started successfully")
         
         # Get bot info
-        bot = app.get_me()
+        bot = await app.get_me()
         print(f"🤖 Bot: @{bot.username}")
         print("🚀 Bot is now running...")
+        print(f"🌐 Web server running on port {PORT}")
         
         # Keep the bot running
-        idle()
+        await idle()
         
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         print(f"❌ Error: {e}")
     finally:
-        app.stop()
+        await app.stop()
         print("🛑 Bot stopped")
+
+if __name__ == "__main__":
+    # Run the bot
+    asyncio.run(main())
