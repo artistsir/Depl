@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import threading
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import (
@@ -399,55 +400,112 @@ async def is_cancelled(msg: Message):
         return True
     return False
 
-# Must Join Handler
+# Must Join Handler (Improved)
 @app.on_message(filters.private & filters.incoming, group=-1)
 async def must_join_handler(client: Client, message: Message):
-    if not MUST_JOIN:
+    if not MUST_JOIN or MUST_JOIN.strip() == "":
         return
         
     try:
+        must_join = MUST_JOIN.strip()
+        
+        # Check if user is in the channel/group
         try:
-            await client.get_chat_member(MUST_JOIN, message.from_user.id)
+            await client.get_chat_member(must_join, message.from_user.id)
+            return  # User is member, allow access
         except UserNotParticipant:
-            if MUST_JOIN.isalpha():
-                link = "https://t.me/" + MUST_JOIN
+            pass  # User not member, show join button
+        except Exception as e:
+            logger.error(f"Error checking membership: {e}")
+            return  # Don't block on other errors
+        
+        # Get invite link
+        try:
+            chat = await client.get_chat(must_join)
+            if chat.username:
+                link = f"https://t.me/{chat.username}"
             else:
-                chat_info = await client.get_chat(MUST_JOIN)
-                link = chat_info.invite_link
-                
-            await message.reply(
-                f"**⚠️ Access Denied!**\n\nYou must join [this channel]({link}) to use me. After joining, try again!",
-                disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✨ Join Channel ✨", url=link)]
-                ])
-            )
-            await message.stop_propagation()
-    except ChatAdminRequired:
-        logger.error(f"I'm not admin in MUST_JOIN chat: {MUST_JOIN}")
+                link = chat.invite_link
+        except Exception as e:
+            logger.error(f"Error getting chat info: {e}")
+            return
+            
+        await message.reply(
+            f"**⚠️ Access Required!**\n\n"
+            f"You must join our channel to use this bot.\n"
+            f"After joining, click /start again!",
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✨ Join Channel ✨", url=link)],
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_join")]
+            ])
+        )
+        await message.stop_propagation()
+        
     except Exception as e:
-        logger.error(f"Must join error: {e}")
+        logger.error(f"Must join handler error: {e}")
+        # Don't block users if there's an error
+        return
 
-# Web server for Render
-from aiohttp import web
+# Refresh callback for join check
+@app.on_callback_query(filters.regex("refresh_join"))
+async def refresh_join_handler(client: Client, callback_query: CallbackQuery):
+    if not MUST_JOIN or MUST_JOIN.strip() == "":
+        await callback_query.message.delete()
+        return
+        
+    try:
+        await client.get_chat_member(MUST_JOIN.strip(), callback_query.from_user.id)
+        # User has joined, show start menu
+        await callback_query.message.delete()
+        await start_command(client, callback_query.message)
+    except UserNotParticipant:
+        await callback_query.answer("❌ You haven't joined yet! Please join the channel first.", show_alert=True)
+    except Exception as e:
+        await callback_query.answer("❌ Error checking membership. Please try again.", show_alert=True)
 
-async def web_server():
-    web_app = web.Application()
-    web_app.router.add_get("/", lambda request: web.Response(text="Bot is running!"))
-    return web_app
+# Simple HTTP Server for Render Port Binding
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is running!')
+        elif self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        logger.info(f"HTTP {self.address_string()} - {format % args}")
+
+def run_http_server():
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+        logger.info(f"HTTP Server running on port {PORT}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"HTTP Server error: {e}")
 
 if __name__ == "__main__":
-    # Start web server in background
-    try:
-        from threading import Thread
-        def run_web():
-            web.run_app(web_server(), port=PORT, host='0.0.0.0')
-        
-        Thread(target=run_web, daemon=True).start()
-        logger.info(f"Web server started on port {PORT}")
-    except Exception as e:
-        logger.warning(f"Failed to start web server: {e}")
+    # Start HTTP server in background thread for Render port binding
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    logger.info(f"Started HTTP server on port {PORT} for Render")
     
     # Start the bot
     logger.info("Starting Advanced String Session Bot...")
-    app.run()
+    
+    try:
+        app.run()
+    except Exception as e:
+        logger.error(f"Bot failed to start: {e}")
+    finally:
+        logger.info("Bot stopped")
