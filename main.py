@@ -1,15 +1,24 @@
 import os
 import logging
-import asyncio
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import (
     ApiIdInvalid, PhoneNumberInvalid, PhoneCodeInvalid,
-    PhoneCodeExpired, SessionPasswordNeeded, PasswordHashInvalid
+    PhoneCodeExpired, SessionPasswordNeeded, PasswordHashInvalid,
+    UserNotParticipant
 )
 from telethon import TelegramClient
+from telethon.errors import (
+    ApiIdInvalidError, PhoneNumberInvalidError, PhoneCodeInvalidError,
+    PhoneCodeExpiredError, SessionPasswordNeededError, PasswordHashInvalidError
+)
 from telethon.sessions import StringSession
-from aiohttp import web
+from dotenv import load_dotenv
+from flask import Flask
+import threading
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -18,20 +27,116 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Get environment variables
-API_ID = int(os.environ.get("API_ID", "0"))
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-MUST_JOIN = os.environ.get("MUST_JOIN", "")
-PORT = int(os.environ.get("PORT", 8080))
+# Bot configuration
+API_ID = int(os.getenv("API_ID", "123456"))
+API_HASH = os.getenv("API_HASH", "abcdef123456")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "123456:ABC-DEF")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+MUST_JOIN = os.getenv("MUST_JOIN", "")
+PORT = int(os.getenv("PORT", 8080))
 
-# Validate required environment variables
-if not API_ID or not API_HASH or not BOT_TOKEN:
-    logger.error("Please set API_ID, API_HASH, and BOT_TOKEN environment variables")
-    exit(1)
+# Text messages
+START_TEXT = """
+**🤖 Welcome to Advanced String Session Generator!**
 
-# User states for session generation
-user_sessions = {}
+I can generate **Pyrogram** and **Telethon** string sessions for you.
+
+**Features:**
+• Pyrogram v2 Sessions
+• Telethon Sessions  
+• Bot String Sessions
+• User String Sessions
+• Secure & Fast Generation
+
+**Click /generate to create your session!**
+
+**🔧 Supported Libraries:**
+- Pyrogram
+- Telethon
+- Pyrogram Bot
+- Telethon Bot
+
+**📚 Tutorial:** [Click Here](https://docs.pyrogram.org/)
+**💬 Support:** @StarkBotsChat
+"""
+
+HELP_TEXT = """
+**📖 String Session Bot Help**
+
+**How to Generate Session:**
+1. Click /generate or "Generate Session"
+2. Choose library type
+3. Enter API_ID from https://my.telegram.org
+4. Enter API_HASH from https://my.telegram.org
+5. Enter phone number (for user) or bot token (for bot)
+6. Complete authentication
+
+**📚 Supported Libraries:**
+- **Pyrogram**: Modern Telegram MTProto API framework
+- **Telethon**: Full-featured Telegram client library  
+- **Pyrogram Bot**: For bot accounts using Pyrogram
+- **Telethon Bot**: For bot accounts using Telethon
+
+**⚠️ Security Notes:**
+• Never share your string session
+• Store it securely
+• Regenerate if compromised
+
+**Need Help?** @StarkBotsChat
+"""
+
+ABOUT_TEXT = """
+**👨‍💻 About String Session Bot**
+
+**Version:** 2.0 Advanced
+**Framework:** Pyrogram
+**Deploy:** Render Compatible
+
+**Features:**
+• Multi-library support
+• Secure session generation
+• Fast & reliable
+• Free to use
+
+**Developer:** @StarkProgrammer
+**Source Code:** [GitHub](https://github.com)
+**Support:** @StarkBotsChat
+
+**🔗 Useful Links:**
+• [Pyrogram Documentation](https://docs.pyrogram.org/)
+• [Telethon Documentation](https://docs.telethon.dev/)
+• [MTProto Documentation](https://core.telegram.org/api)
+"""
+
+# Button layouts
+START_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🚀 Generate Session", callback_data="generate")],
+    [
+        InlineKeyboardButton("📖 Help", callback_data="help"),
+        InlineKeyboardButton("👨‍💻 About", callback_data="about")
+    ],
+    [InlineKeyboardButton("🔧 Source Code", url="https://github.com")]
+])
+
+HOME_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🏠 Home", callback_data="home")]
+])
+
+ASK_QUES = "**Please choose the Python library you want to generate string session for:**"
+BUTTONS_QUES = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("Pyrogram", callback_data="pyrogram"),
+        InlineKeyboardButton("Telethon", callback_data="telethon"),
+    ],
+    [
+        InlineKeyboardButton("Pyrogram Bot", callback_data="pyrogram_bot"),
+        InlineKeyboardButton("Telethon Bot", callback_data="telethon_bot"),
+    ],
+    [InlineKeyboardButton("🏠 Home", callback_data="home")]
+])
+
+# User states
+user_states = {}
 
 # Initialize Pyrogram client
 app = Client(
@@ -42,79 +147,12 @@ app = Client(
     in_memory=True
 )
 
-# Text messages
-START_TEXT = """
-**🤖 Welcome to String Session Generator Bot!**
-
-I can generate **Pyrogram** and **Telethon** string sessions for your user accounts and bots.
-
-**🔧 Supported Libraries:**
-- Pyrogram (User & Bot)
-- Telethon (User & Bot)
-
-**Click Generate Session to start!**
-
-**Developed with ❤️ by @StarkBots**
-"""
-
-HELP_TEXT = """
-**📖 Help Guide**
-
-**Steps to Generate Session:**
-
-1. Choose library type (Pyrogram/Telethon)
-2. Enter API_ID from https://my.telegram.org
-3. Enter API_HASH from https://my.telegram.org
-4. Enter phone number (user) or bot token (bot)
-5. Complete authentication
-6. Get your string session!
-
-**Need Help?** @StarkBotsChat
-"""
-
-ABOUT_TEXT = """
-**👨‍💻 About This Bot**
-
-**Version:** 2.0
-**Framework:** Pyrogram
-**Platform:** Render
-
-**Developer:** @StarkProgrammer
-**Support:** @StarkBotsChat
-"""
-
-# Button layouts
-START_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🚀 Generate Session", callback_data="generate")],
-    [
-        InlineKeyboardButton("📖 Help", callback_data="help"),
-        InlineKeyboardButton("👨‍💻 About", callback_data="about")
-    ]
-])
-
-HOME_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🏠 Home", callback_data="home")]
-])
-
-LIBRARY_BUTTONS = InlineKeyboardMarkup([
-    [
-        InlineKeyboardButton("Pyrogram", callback_data="pyrogram"),
-        InlineKeyboardButton("Telethon", callback_data="telethon")
-    ],
-    [
-        InlineKeyboardButton("Pyrogram Bot", callback_data="pyrogram_bot"),
-        InlineKeyboardButton("Telethon Bot", callback_data="telethon_bot")
-    ],
-    [InlineKeyboardButton("🏠 Home", callback_data="home")]
-])
-
 # Start Command
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     user_id = message.from_user.id
-    # Clear any existing session data
-    if user_id in user_sessions:
-        del user_sessions[user_id]
+    if user_id in user_states:
+        del user_states[user_id]
     
     await message.reply_text(
         START_TEXT,
@@ -131,7 +169,7 @@ async def help_command(client: Client, message: Message):
         disable_web_page_preview=True
     )
 
-# About Command  
+# About Command
 @app.on_message(filters.command("about") & filters.private)
 async def about_command(client: Client, message: Message):
     await message.reply_text(
@@ -144,72 +182,61 @@ async def about_command(client: Client, message: Message):
 @app.on_message(filters.command("generate") & filters.private)
 async def generate_command(client: Client, message: Message):
     user_id = message.from_user.id
-    if user_id in user_sessions:
-        del user_sessions[user_id]
+    if user_id in user_states:
+        del user_states[user_id]
     
-    await message.reply_text(
-        "**Choose the library you want to generate string session for:**",
-        reply_markup=LIBRARY_BUTTONS
-    )
+    await message.reply_text(ASK_QUES, reply_markup=BUTTONS_QUES)
 
 # Cancel Command
 @app.on_message(filters.command("cancel") & filters.private)
 async def cancel_command(client: Client, message: Message):
     user_id = message.from_user.id
-    if user_id in user_sessions:
-        del user_sessions[user_id]
-        await message.reply_text("❌ Process cancelled!")
-    else:
-        await message.reply_text("❌ No active process to cancel!")
+    if user_id in user_states:
+        del user_states[user_id]
+        await message.reply_text("❌ Process cancelled! Use /generate to start again.")
 
 # Callback Query Handler
 @app.on_callback_query()
 async def callback_handler(client: Client, callback_query: CallbackQuery):
+    query = callback_query.data.lower()
     user_id = callback_query.from_user.id
-    query = callback_query.data
     
     if query == "home":
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
         await callback_query.message.edit_text(
             START_TEXT,
             reply_markup=START_BUTTONS,
             disable_web_page_preview=True
         )
-    
     elif query == "help":
         await callback_query.message.edit_text(
             HELP_TEXT,
             reply_markup=HOME_BUTTONS,
             disable_web_page_preview=True
         )
-    
     elif query == "about":
         await callback_query.message.edit_text(
             ABOUT_TEXT,
             reply_markup=HOME_BUTTONS,
             disable_web_page_preview=True
         )
-    
     elif query == "generate":
-        await callback_query.message.edit_text(
-            "**Choose the library you want to generate string session for:**",
-            reply_markup=LIBRARY_BUTTONS
-        )
-    
+        await callback_query.message.edit_text(ASK_QUES, reply_markup=BUTTONS_QUES)
     elif query in ["pyrogram", "telethon", "pyrogram_bot", "telethon_bot"]:
         await callback_query.answer()
+        telethon = query.startswith("telethon")
+        is_bot = query.endswith("_bot")
         
-        # Initialize user session
-        user_sessions[user_id] = {
-            "library": query,
-            "step": "api_id"
+        # Initialize user state
+        user_states[user_id] = {
+            "step": "api_id",
+            "telethon": telethon,
+            "is_bot": is_bot
         }
         
         await callback_query.message.edit_text(
-            "**Please send your API_ID:**\n\n"
-            "Get it from https://my.telegram.org\n\n"
-            "Type /cancel to stop the process."
+            "**Please send your API_ID:**\n\nGet from https://my.telegram.org\n\nType /cancel to stop"
         )
 
 # Message handler for session generation
@@ -217,302 +244,306 @@ async def callback_handler(client: Client, callback_query: CallbackQuery):
 async def message_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
-    if user_id not in user_sessions:
+    if user_id not in user_states:
         return
     
-    session_data = user_sessions[user_id]
-    user_input = message.text.strip()
+    state = user_states[user_id]
+    user_input = message.text
     
     try:
-        if session_data["step"] == "api_id":
-            # Validate API_ID
+        if state["step"] == "api_id":
             try:
                 api_id = int(user_input)
-                session_data["api_id"] = api_id
-                session_data["step"] = "api_hash"
-                
-                await message.reply_text(
-                    "**Please send your API_HASH:**\n\n"
-                    "Get it from https://my.telegram.org\n\n"
-                    "Type /cancel to stop the process."
-                )
+                user_states[user_id] = {
+                    "step": "api_hash",
+                    "api_id": api_id,
+                    "telethon": state["telethon"],
+                    "is_bot": state["is_bot"]
+                }
+                await message.reply_text("**Please send your API_HASH:**\n\nGet from https://my.telegram.org\n\nType /cancel to stop")
             except ValueError:
-                await message.reply_text("❌ Invalid API_ID! It must be a number. Please start again with /generate")
-                del user_sessions[user_id]
-        
-        elif session_data["step"] == "api_hash":
-            # Store API_HASH
-            session_data["api_hash"] = user_input
-            session_data["step"] = "auth_data"
+                await message.reply_text("❌ Invalid API_ID! Must be an integer. Please start again with /generate")
+                del user_states[user_id]
+                
+        elif state["step"] == "api_hash":
+            user_states[user_id] = {
+                "step": "auth_data",
+                "api_id": state["api_id"],
+                "api_hash": user_input,
+                "telethon": state["telethon"],
+                "is_bot": state["is_bot"]
+            }
             
-            library = session_data["library"]
-            is_bot = "bot" in library
-            
-            if is_bot:
-                await message.reply_text(
-                    "**Please send your BOT_TOKEN:**\n\n"
-                    "Get it from @BotFather\n\n"
-                    "Format: `1234567890:ABCDEFGhijklmnopqrstuvwxyz`\n\n"
-                    "Type /cancel to stop the process."
-                )
+            if not state["is_bot"]:
+                prompt = "**Send your PHONE_NUMBER with country code:**\nExample: `+1234567890`\n\nType /cancel to stop"
             else:
-                await message.reply_text(
-                    "**Please send your PHONE_NUMBER:**\n\n"
-                    "Include country code.\n"
-                    "Example: `+1234567890`\n\n"
-                    "Type /cancel to stop the process."
-                )
-        
-        elif session_data["step"] == "auth_data":
-            # Store phone number or bot token
-            session_data["auth_data"] = user_input
-            await process_session_generation(client, message, session_data)
+                prompt = "**Send your BOT_TOKEN:**\nExample: `12345:abcdefghijklmnopqrstuvwxyz`\n\nType /cancel to stop"
+                
+            await message.reply_text(prompt)
             
-        elif session_data["step"] == "otp":
-            # Process OTP
-            await process_otp(client, message, session_data, user_input)
+        elif state["step"] == "auth_data":
+            await process_auth_data(client, message, state, user_input)
             
-        elif session_data["step"] == "password":
-            # Process 2FA password
-            await process_password(client, message, session_data, user_input)
+        elif state["step"] == "otp":
+            otp_code = user_input.replace(" ", "")
+            await process_otp_code(client, message, state, otp_code)
+            
+        elif state["step"] == "password":
+            await process_password(client, message, state, user_input)
             
     except Exception as e:
-        logger.error(f"Error in message handler: {e}")
+        logger.error(f"Message handler error: {e}")
         await message.reply_text("❌ An error occurred. Please start again with /generate")
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
-async def process_session_generation(client: Client, message: Message, session_data: dict):
+async def process_auth_data(client: Client, message: Message, state: dict, auth_data: str):
     user_id = message.from_user.id
-    library = session_data["library"]
-    is_bot = "bot" in library
-    is_telethon = "telethon" in library
+    ty = "Telethon" if state["telethon"] else "Pyrogram v2"
+    if state["is_bot"]:
+        ty += " Bot"
+    
+    await message.reply_text(f"**Starting {ty} Session Generation...**")
+    
+    if not state["is_bot"]:
+        await message.reply_text("📤 Sending OTP...")
+    else:
+        await message.reply_text("🤖 Logging in as Bot...")
+    
+    # Initialize client
+    if state["telethon"]:
+        tg_client = TelegramClient(StringSession(), state["api_id"], state["api_hash"])
+    else:
+        if state["is_bot"]:
+            tg_client = Client(
+                f"bot_{user_id}", 
+                api_id=state["api_id"], 
+                api_hash=state["api_hash"], 
+                bot_token=auth_data,
+                in_memory=True
+            )
+        else:
+            tg_client = Client(
+                f"user_{user_id}",
+                api_id=state["api_id"],
+                api_hash=state["api_hash"],
+                in_memory=True
+            )
     
     try:
-        await message.reply_text("🔄 Starting session generation...")
-        
-        # Initialize the appropriate client
-        if is_telethon:
-            tg_client = TelegramClient(StringSession(), session_data["api_id"], session_data["api_hash"])
-        else:
-            if is_bot:
-                tg_client = Client(
-                    "bot_session",
-                    api_id=session_data["api_id"],
-                    api_hash=session_data["api_hash"],
-                    bot_token=session_data["auth_data"],
-                    in_memory=True
-                )
-            else:
-                tg_client = Client(
-                    "user_session", 
-                    api_id=session_data["api_id"],
-                    api_hash=session_data["api_hash"],
-                    in_memory=True
-                )
-        
         await tg_client.connect()
-        session_data["tg_client"] = tg_client
         
-        if is_bot:
+        if not state["is_bot"]:
+            # User authentication
+            if state["telethon"]:
+                sent_code = await tg_client.send_code_request(auth_data)
+            else:
+                sent_code = await tg_client.send_code(auth_data)
+            
+            user_states[user_id] = {
+                "step": "otp",
+                "api_id": state["api_id"],
+                "api_hash": state["api_hash"],
+                "telethon": state["telethon"],
+                "is_bot": state["is_bot"],
+                "tg_client": tg_client,
+                "auth_data": auth_data,
+                "phone_code_hash": sent_code.phone_code_hash if not state["telethon"] else None
+            }
+            
+            await message.reply_text(
+                "**Send the OTP received on Telegram:**\n\n"
+                "If OTP is `12345`, send as: `1 2 3 4 5`\n\n"
+                "Type /cancel to stop"
+            )
+            
+        else:
             # Bot authentication
             try:
-                if is_telethon:
-                    await tg_client.start(bot_token=session_data["auth_data"])
+                if state["telethon"]:
+                    await tg_client.start(bot_token=auth_data)
                 else:
-                    await tg_client.sign_in_bot(session_data["auth_data"])
+                    await tg_client.sign_in_bot(auth_data)
                 
-                # Generate session string
-                await generate_final_session(client, message, session_data)
-                
+                # Generate session for bot
+                await generate_session_string(client, message, tg_client, state["telethon"], state["is_bot"])
+                await tg_client.disconnect()
+                if user_id in user_states:
+                    del user_states[user_id]
+                    
             except Exception as e:
-                await message.reply_text(f"❌ Invalid bot token: {e}\nPlease start again with /generate")
+                await message.reply_text(f"❌ Invalid BOT_TOKEN: {e}\nPlease start again with /generate")
                 await tg_client.disconnect()
-                if user_id in user_sessions:
-                    del user_sessions[user_id]
-        else:
-            # User authentication - send OTP
-            try:
-                if is_telethon:
-                    await tg_client.send_code_request(session_data["auth_data"])
-                else:
-                    sent_code = await tg_client.send_code(session_data["auth_data"])
-                    session_data["phone_code_hash"] = sent_code.phone_code_hash
-                
-                session_data["step"] = "otp"
-                
-                await message.reply_text(
-                    "**OTP sent successfully!**\n\n"
-                    "Please send the OTP you received on Telegram.\n\n"
-                    "If OTP is `12345`, please send it as: `1 2 3 4 5`\n\n"
-                    "Type /cancel to stop the process."
-                )
-                
-            except (ApiIdInvalid, PhoneNumberInvalid):
-                await message.reply_text("❌ Invalid API_ID/API_HASH or phone number! Please start again with /generate")
-                await tg_client.disconnect()
-                if user_id in user_sessions:
-                    del user_sessions[user_id]
-                
+                if user_id in user_states:
+                    del user_states[user_id]
+                    
     except Exception as e:
-        await message.reply_text(f"❌ Error: {str(e)}\nPlease start again with /generate")
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        await message.reply_text(f"❌ Error: {e}\nPlease start again with /generate")
+        if user_id in user_states:
+            del user_states[user_id]
 
-async def process_otp(client: Client, message: Message, session_data: dict, otp_code: str):
+async def process_otp_code(client: Client, message: Message, state: dict, otp_code: str):
     user_id = message.from_user.id
-    tg_client = session_data["tg_client"]
-    is_telethon = "telethon" in session_data["library"]
+    tg_client = state["tg_client"]
     
     try:
-        otp_code = otp_code.replace(" ", "")
-        
-        if is_telethon:
-            await tg_client.sign_in(session_data["auth_data"], code=otp_code)
+        if state["telethon"]:
+            await tg_client.sign_in(state["auth_data"], otp_code)
         else:
-            await tg_client.sign_in(session_data["auth_data"], session_data["phone_code_hash"], otp_code)
+            await tg_client.sign_in(state["auth_data"], state["phone_code_hash"], otp_code)
         
         # Generate session string
-        await generate_final_session(client, message, session_data)
+        await generate_session_string(client, message, tg_client, state["telethon"], state["is_bot"])
+        await tg_client.disconnect()
+        if user_id in user_states:
+            del user_states[user_id]
+            
+    except (SessionPasswordNeeded, SessionPasswordNeededError):
+        user_states[user_id] = {
+            "step": "password",
+            "api_id": state["api_id"],
+            "api_hash": state["api_hash"],
+            "telethon": state["telethon"],
+            "is_bot": state["is_bot"],
+            "tg_client": tg_client
+        }
+        await message.reply_text("**🔒 Account has 2FA. Send your password:**\n\nType /cancel to stop")
         
-    except SessionPasswordNeeded:
-        session_data["step"] = "password"
-        await message.reply_text(
-            "**Your account has two-step verification enabled.**\n\n"
-            "Please send your password:\n\n"
-            "Type /cancel to stop the process."
-        )
-    except (PhoneCodeInvalid, PhoneCodeExpired):
-        await message.reply_text("❌ Invalid or expired OTP code! Please start again with /generate")
+    except (PhoneCodeInvalid, PhoneCodeInvalidError):
+        await message.reply_text("❌ Invalid OTP code! Please start again with /generate")
         await tg_client.disconnect()
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
+    except (PhoneCodeExpired, PhoneCodeExpiredError):
+        await message.reply_text("❌ OTP code expired! Please start again with /generate")
+        await tg_client.disconnect()
+        if user_id in user_states:
+            del user_states[user_id]
     except Exception as e:
-        await message.reply_text(f"❌ Error: {str(e)}\nPlease start again with /generate")
+        await message.reply_text(f"❌ Error: {e}\nPlease start again with /generate")
         await tg_client.disconnect()
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
-async def process_password(client: Client, message: Message, session_data: dict, password: str):
+async def process_password(client: Client, message: Message, state: dict, password: str):
     user_id = message.from_user.id
-    tg_client = session_data["tg_client"]
-    is_telethon = "telethon" in session_data["library"]
+    tg_client = state["tg_client"]
     
     try:
-        if is_telethon:
+        if state["telethon"]:
             await tg_client.sign_in(password=password)
         else:
             await tg_client.check_password(password=password)
         
         # Generate session string
-        await generate_final_session(client, message, session_data)
-        
-    except PasswordHashInvalid:
+        await generate_session_string(client, message, tg_client, state["telethon"], state["is_bot"])
+        await tg_client.disconnect()
+        if user_id in user_states:
+            del user_states[user_id]
+            
+    except (PasswordHashInvalid, PasswordHashInvalidError):
         await message.reply_text("❌ Invalid password! Please start again with /generate")
         await tg_client.disconnect()
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
     except Exception as e:
-        await message.reply_text(f"❌ Error: {str(e)}\nPlease start again with /generate")
+        await message.reply_text(f"❌ Error: {e}\nPlease start again with /generate")
         await tg_client.disconnect()
-        if user_id in user_sessions:
-            del user_sessions[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
-async def generate_final_session(client: Client, message: Message, session_data: dict):
-    user_id = message.from_user.id
-    tg_client = session_data["tg_client"]
-    library = session_data["library"]
-    is_telethon = "telethon" in library
+async def generate_session_string(client: Client, message: Message, tg_client, telethon: bool, is_bot: bool):
+    # Determine session type
+    ty = "Telethon" if telethon else "Pyrogram v2"
+    if is_bot:
+        ty += " Bot"
     
-    try:
-        # Generate session string
-        if is_telethon:
-            session_string = tg_client.session.save()
-        else:
-            session_string = await tg_client.export_session_string()
-        
-        # Prepare session info
-        library_name = "Telethon" if is_telethon else "Pyrogram"
-        if "bot" in library:
-            library_name += " Bot"
-        
-        session_text = f"""
-**✅ {library_name.upper()} STRING SESSION**
+    # Generate session string
+    if telethon:
+        session_string = tg_client.session.save()
+    else:
+        session_string = await tg_client.export_session_string()
+    
+    # Send session string
+    session_text = f"""
+**✅ {ty.upper()} STRING SESSION**
 
 ```{session_string}```
 
-**⚠️ Keep this string safe and secure!**
-**Don't share with anyone!**
+**⚠️ Important:**
+• Keep this string safe and secure!
+• Don't share with anyone!
+• This can be used to access your account.
 
 **Generated by @StringSessionBot**
 """
-        
-        # Send session to user
-        await message.reply_text(session_text)
-        await message.reply_text("✅ **Session generated successfully!**")
-        
-        # Try to send to saved messages
-        try:
-            if "bot" not in library:
-                await tg_client.send_message("me", "**Your String Session:**\n\n" + session_string)
-        except:
-            pass
-            
-    except Exception as e:
-        await message.reply_text(f"❌ Error generating session: {str(e)}")
-    finally:
-        # Cleanup
-        await tg_client.disconnect()
-        if user_id in user_sessions:
-            del user_sessions[user_id]
-
-# Web server for Render port binding
-async def health_check(request):
-    return web.Response(text="🤖 String Session Bot is running!")
-
-async def start_web_server():
-    web_app = web.Application()
-    web_app.router.add_get('/', health_check)
-    web_app.router.add_get('/health', health_check)
-    
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    
-    logger.info(f"🌐 Web server started on port {PORT}")
-    return runner
-
-# Start the bot
-async def main():
-    logger.info("Starting String Session Bot...")
-    print("🤖 Bot is starting...")
     
     try:
-        # Start web server for Render
-        web_runner = await start_web_server()
-        
-        # Start the bot
-        await app.start()
-        print("✅ Bot started successfully!")
-        
-        # Get bot info
-        bot = await app.get_me()
-        print(f"🤖 Bot: @{bot.username}")
-        print("🚀 Bot is now running...")
-        print(f"🌐 Web server running on port {PORT}")
-        
-        # Keep the bot running
-        await idle()
-        
+        # Try to send to saved messages first
+        if not is_bot:
+            await tg_client.send_message("me", session_text)
+        # Also send via bot
+        await client.send_message(message.chat.id, session_text)
+        await message.reply_text("**✅ Session generated successfully! Check your saved messages and this chat.**")
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        print(f"❌ Error: {e}")
-    finally:
-        await app.stop()
-        print("🛑 Bot stopped")
+        # If failed, send in current chat
+        await message.reply_text(session_text)
+        await message.reply_text("**✅ Session generated successfully!**")
+
+# Must Join Handler
+@app.on_message(filters.private & filters.incoming, group=-1)
+async def must_join_handler(client: Client, message: Message):
+    if not MUST_JOIN:
+        return
+        
+    try:
+        await client.get_chat_member(MUST_JOIN, message.from_user.id)
+    except UserNotParticipant:
+        try:
+            chat = await client.get_chat(MUST_JOIN)
+            invite_link = chat.invite_link if chat.invite_link else f"https://t.me/{chat.username}"
+            
+            await message.reply_text(
+                f"**Please join our channel first to use this bot.**\n\n"
+                f"After joining, send /start again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Join Channel", url=invite_link)]
+                ])
+            )
+            await message.stop_propagation()
+        except Exception as e:
+            logger.error(f"Error in must_join: {e}")
+
+# Simple Flask server for PORT binding
+def create_flask_app():
+    flask_app = Flask(__name__)
+    
+    @flask_app.route('/')
+    def home():
+        return "🤖 String Session Bot is Running!"
+    
+    @flask_app.route('/health')
+    def health():
+        return "OK"
+    
+    return flask_app
+
+def run_flask():
+    flask_app = create_flask_app()
+    flask_app.run(host='0.0.0.0', port=PORT, debug=False)
 
 if __name__ == "__main__":
-    # Run the bot
-    asyncio.run(main())
+    # Start Flask server in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask server started on port {PORT}")
+    
+    # Start the bot
+    logger.info("Starting String Session Bot...")
+    print("Bot is starting...")
+    
+    try:
+        app.run()
+    except Exception as e:
+        logger.error(f"Bot failed to start: {e}")
+        print(f"Error: {e}")
